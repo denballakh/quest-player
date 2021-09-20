@@ -1,0 +1,39 @@
+locations:
+
+  start:
+    is_start: true
+    text: You are in the room. You can go to next room.
+    jumps:
+      - next: next_room
+        text: Go to next room
+        condition: <health> >= 50
+        var_changes:
+          health: <health> - 10
+          hunger: <hunger> + 5
+
+  next_room:
+    text: Room text.
+    jumps:
+      - next: next_room
+        text: Stay here
+        var_changes:
+          health: <health> - 1
+          hunger: <hunger> + 1
+
+      - next: start
+        text: Go to start
+
+      - next: end
+        text: End this please
+        var_changes:
+          health: <health> - 20
+          hunger: <hunger> + 10
+
+  end:
+    is_end: true
+    text: End text.
+    jumps: []
+
+vars:
+  health: 100
+  hunger: 0

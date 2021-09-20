@@ -1,52 +1,60 @@
 # Usage:
-# python quest_player.py -i quests/q1.json
-import json
+# python quest_player.py -i quests/q1.yaml
+
 from pprint import pprint
+# from ast import literal_eval
+
+import yaml
 
 __all__ = ['QuestPlayer', ]
 
-# TODO: {"next_loc_name":{...jump...}} -> [{"next":"next_loc_name",...jump...}]
+# TODO: replace `eval` with safe version
 
 class Location:
-    id_: str
+    name: str
     text: str
-    jumps: dict[str, 'Jump']
-    terminal: bool
+    jumps: list['Jump']
+    is_end: bool
+    is_start: bool
 
-    def __init__(self, id_: str, data: dict):
-        self.id_ = id_
+    def __init__(self, name: str, data: dict):
+        self.name = name
         self.text = data['text']
+        self.is_end = bool(data['is_end']) if 'is_end' in data else False
+        self.is_start = bool(data['is_start']) if 'is_start' in data else False
 
-        if 'terminal' in data:
-            self.terminal = bool(data['terminal'])
-        else:
-            self.terminal = False
 
-        jumps: dict[str, dict] = data['jumps']
-        self.jumps = {}
-        for jump_to_id, jump_data in jumps.items():
-            jump = Jump(jump_to_id, jump_data)
-            self.jumps[jump_to_id] = jump
+        self.jumps = []
+        for jump_data in data['jumps']:
+            jump = Jump(self.name, jump_data)
+            self.jumps.append(jump)
 
     def __repr__(self) -> str:
-        return f'<Location: id={self.id_!r} text={self.text!r} jumps={self.jumps!r}>'
+        return f'<Location: name={self.name!r} text={self.text!r} jumps={self.jumps!r}>'
+
+    def dump(self) -> object:
+        return {
+            'name': self.name,
+            'text': self.text,
+            'is_start': self.is_start,
+            'is_end': self.is_end,
+            'jumps': [j.dump() for j in self.jumps],
+        }
 
 
 
 class Jump:
-    id_: str # jump to
+    prev: str
+    next: str # next location
     text: str
     condition: str
     var_changes: dict[str, str]
 
-    def __init__(self, id_: str, data: dict):
-        self.id_ = id_
+    def __init__(self, prev: str, data: dict):
+        self.prev = prev
+        self.next = data['next'] if 'next' in data else self.prev
         self.text = data['text']
-
-        if 'condition' in data:
-            self.condition = data['condition']
-        else:
-            self.condition = '1' # truth value, always passes check
+        self.condition = data['condition'] if 'condition' in data else 'True'
 
         self.var_changes = {}
         if 'var_changes' in data:
@@ -54,8 +62,16 @@ class Jump:
                 self.var_changes[var_name] = var_expr
 
     def __repr__(self) -> str:
-        return f'<Jump: id={self.id_!r} condition={self.condition!r} var_changes={self.var_changes!r}>'
+        return f'<Jump: text={self.text!r} prev={self.prev!r} next={self.next!r} condition={self.condition!r} var_changes={self.var_changes!r}>'
 
+    def dump(self) -> object:
+        return {
+            'next': self.next,
+            '--prev': self.prev, # will be ignored
+            'text': self.text,
+            'condition': self.condition,
+            'var_changes': self.var_changes,
+        }
 
 class QuestPlayer:
     locations: dict[str, Location]
@@ -64,12 +80,18 @@ class QuestPlayer:
 
     def __init__(self, data: dict):
         self.locations = {}
-        for loc_id, loc_data in data['locations'].items():
-            loc = Location(loc_id, loc_data)
-            self.locations[loc_id] = loc
+        for loc_name, loc_data in data['locations'].items():
+            loc = Location(loc_name, loc_data)
+            self.locations[loc_name] = loc
 
         self.variables = data['vars']
-        self.current_location = self.locations[data['start_loc']]
+        # self.current_location = self.locations[data['start_loc']]
+        for _, loc in self.locations.items():
+            if loc.is_start:
+                self.current_location = loc
+                break
+
+        self.check()
 
 
     def __repr__(self) -> str:
@@ -80,10 +102,13 @@ class QuestPlayer:
 
     def run(self):
         while True:
-            print(self.current_location.text)
+            loc = self.current_location
+
+            print(loc.text)
+            pprint(self.variables)
             print()
             jumps = []
-            for jump in self.current_location.jumps.values():
+            for jump in loc.jumps:
                 jumps.append(jump)
 
             for i, jump in enumerate(jumps):
@@ -94,7 +119,7 @@ class QuestPlayer:
             print()
 
 
-            if self.current_location.terminal:
+            if loc.is_end:
                 break
 
             inp = input()
@@ -108,20 +133,40 @@ class QuestPlayer:
             self.execute_jump(jump)
 
     def execute_jump(self, jump: Jump):
-        self.current_location = self.locations[jump.id_]
-        # TODO: execute vars changes
+        self.current_location = self.locations[jump.next]
+
+        new_vars = {k: v for k, v in self.variables.items()}
+
+        for var_name, var_new_val in jump.var_changes.items():
+            new_vars[var_name] = self.calc_expression(var_new_val)
+
+        self.variables = new_vars
 
     def check_jump(self, jump: Jump) -> bool:
-        return True
-        # TODO: check conditions
+        return bool(self.calc_expression(jump.condition))
+
+    def calc_expression(self, expr: str):
+        for var_name, var_value in self.variables.items():
+            expr = expr.replace(f'<{var_name}>', str(var_value))
+
+        return eval(expr)
+
 
 
     @classmethod
     def from_file(cls, filename: str) -> 'QuestPlayer':
         with open(filename, 'rt') as file:
-            data = json.load(file)
+            data = yaml.safe_load(file)
+        # pprint(data)
 
         return cls(data)
+
+    def dump(self) -> object:
+        return {
+            'locations': {name: loc.dump() for name, loc in self.locations.items()},
+            'vars': self.variables,
+            '--current_location': self.current_location.name,
+        }
 
 if __name__ == "__main__":
     import argparse
@@ -132,6 +177,6 @@ if __name__ == "__main__":
     # pprint(args)
 
     qp = QuestPlayer.from_file(args.input)
-    # pprint(qp)
+    # pprint(qp.dump())
     qp.run()
 
